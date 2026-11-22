@@ -916,6 +916,10 @@ html,body{max-width:100%;overflow-x:hidden}button,input,textarea{touch-action:ma
  padding:0 2px!important;box-sizing:border-box!important;
 }
 @media(max-width:650px){#busQueue #bqBusNumber.bridgeOneLine{font-size:clamp(9px,2.35vw,15px)!important}}
+</style><style>
+.trCustomBtn{display:block;width:100%;margin:9px 0;padding:14px;border:2px solid #9ccde1;border-radius:12px;background:#164b65;color:white;font-size:18px;font-weight:bold;cursor:pointer}
+.trCustomSelect{display:block;width:100%;margin:9px 0;padding:13px;border:2px solid #7ca7ba;border-radius:10px;background:white;color:#172331;font-size:18px}
+#linePicker>div{max-height:92dvh;overflow-y:auto}
 </style></head>
 <body>
 <div id="linePicker" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(3,12,24,.94);align-items:center;justify-content:center;padding:16px;overflow:auto">
@@ -1340,7 +1344,28 @@ function travelPurpose(m){
  if(task.includes('family'))return 'meet your family';
  if(task.includes('work'))return 'go to work';
  if(task.includes('friend'))return 'meet a friend';
- return 'travel to '+dest;
+ // Choose one sensible activity per journey, rather than repeating the same objective.
+ // Cache it against the mission so the wording stays consistent throughout gameplay.
+ if(!travelPurpose.fallbacks)travelPurpose.fallbacks=new WeakMap();
+ if(m&&typeof m==='object'&&travelPurpose.fallbacks.has(m))return travelPurpose.fallbacks.get(m);
+ // Only offer activities that make sense near the selected destination.
+ // The location-specific activities are deliberately conservative.
+ const place=dest.toLowerCase().replace(/\s+(?:ns|ew|ne|cc|dt|te|cg|bp|se|sw|pe|pw)\d+[a-z]?\b.*$/i,'').trim();
+ const near=(names)=>names.some(n=>place===n || place.startsWith(n+' '));
+ const activities=['explore the neighbourhood','have lunch','buy a drink','have dinner','buy a snack','buy a birthday gift','buy stationery','buy toiletries','buy a new notebook','look for a new pair of shoes','buy ingredients for dinner','have breakfast','buy a phone charger','buy a greeting card','buy school supplies','buy a water bottle','buy a gift for a family member','have a drink at a cafe'];
+ if(near(['bishan','bedok','clementi','choa chu kang','bukit batok','jurong east','jurong west','pasir ris','tampines','woodlands','yishun','sengkang','hougang','serangoon','queenstown','redhill','yio chu kang','bukit panjang','canberra']))activities.push('go swimming');
+ if(near(['city hall','bras basah','bencoolen','dhoby ghaut','esplanade','promenade','bayfront','marina bay','fort canning']))activities.push('visit a museum');
+ if(near(['bishan','bedok','clementi','tampines','jurong east','woodlands','yishun','punggol','sengkang','hougang','serangoon','queenstown','orchard','bugis','city hall','harbourfront','pasir ris','choa chu kang','bukit panjang','ang mo kio','toa payoh']))activities.push('visit a library','return a library book','read at the library');
+ if(near(['orchard','somerset','dhoby ghaut','bugis','city hall','raffles place','tampines','bedok','jurong east','bishan','woodlands','harbourfront','serangoon','punggol','sengkang','ang mo kio','toa payoh','clementi']))activities.push('visit a shopping mall','visit a bookstore','visit a sports shop');
+ if(near(['botanic gardens','gardens by the bay','bayfront','fort canning','pasir ris','bishan','punggol','lakeside','chinese garden','marina bay','harbourfront','kent ridge','bedok']))activities.push('visit a park','take photos of the area');
+ if(near(['bishan','bedok','clementi','tampines','woodlands','yishun','punggol','sengkang','hougang','serangoon','queenstown','jurong east','ang mo kio','toa payoh','choa chu kang']))activities.push('visit a community centre','attend a workshop','attend a course');
+ if(near(['orchard','somerset','dhoby ghaut','bugis','city hall','raffles place','tampines','jurong east','bishan','woodlands','harbourfront']))activities.push('watch a movie');
+ const previous=travelPurpose.lastFallback;
+ const available=activities.filter(a=>a!==previous);
+ const chosen=available[Math.floor(Math.random()*available.length)];
+ travelPurpose.lastFallback=chosen;
+ if(m&&typeof m==='object')travelPurpose.fallbacks.set(m,chosen);
+ return chosen;
 }
 function setupTrainJourney(){
  let line=mission[5],q=stationSequences[line]||[];
@@ -2480,15 +2505,48 @@ function makeLineMission(line){
  const eligible=possibilities.filter(m=>!used.has(m[1]+"|"+m[3]+"|"+m[5]));
  return (eligible.length?eligible:possibilities)[Math.floor(Math.random()*(eligible.length||possibilities.length))];
 }
+const customDirectRoutes={};
 function pickMission(){
- const line=selectedMrtLines[adventureStep]||mrtLineChoices[Math.floor(Math.random()*mrtLineChoices.length)];
- mission=makeLineMission(line);
+  const fixed=customDirectRoutes[adventureStep];
+  if(fixed){const a=st(fixed.from),b=st(fixed.to);mission=['Custom journey',a.n,a.c,b.n,b.c,fixed.line];adventureMissions[adventureStep]=mission;return}
+  const line=selectedMrtLines[adventureStep]||mrtLineChoices[Math.floor(Math.random()*mrtLineChoices.length)];
+  mission=makeLineMission(line);
  adventureMissions[adventureStep]=mission;
 }
 function chooseLineForScenario(onChosen){
  const box=$("linePickerChoices");
  $("linePickerTitle").textContent="🚇 Scenario "+(adventureStep+1)+" / 5";
  box.replaceChildren();
+ const custom=document.createElement('button');custom.type='button';custom.textContent='🛠️ Custom route — choose starting point and destination';
+ custom.style.cssText='font-size:19px;font-weight:bold;padding:14px;border:3px solid #ffd166;border-radius:13px;background:#294c57;color:white;cursor:pointer';
+ custom.onclick=()=>{
+  box.replaceChildren();
+  const heading=document.createElement('h3');heading.textContent='Choose your own MRT journey';box.appendChild(heading);
+  const lineSel=document.createElement('select'),fromSel=document.createElement('select'),toSel=document.createElement('select');
+  for(const sel of [lineSel,fromSel,toSel]){sel.style.cssText='width:100%;padding:13px;font-size:18px;border-radius:9px;background:white;color:#132637;box-sizing:border-box;border:4px solid #d42e12;font-weight:600;';box.appendChild(sel)}
+  const routeColorKey=document.createElement('div');routeColorKey.style.cssText='display:flex;align-items:center;justify-content:center;gap:12px;font-weight:800;font-size:18px;padding:7px;border-radius:10px;';box.insertBefore(routeColorKey,lineSel);
+  function updateRouteColors(){
+   const color=(lineInfo[lineSel.value]||{}).color||'#526579';
+   const darkText=lineSel.value==='Circle Line';
+   for(const sel of [lineSel,fromSel,toSel]){
+    sel.style.borderColor=color;
+    sel.style.backgroundColor='color-mix(in srgb, '+color+' 12%, white)';
+    sel.style.color='#132637';
+    sel.style.boxShadow='inset 7px 0 0 '+color;
+   }
+   routeColorKey.style.backgroundColor=color;
+   routeColorKey.style.color=darkText?'#172534':'white';
+   routeColorKey.textContent='🚇 '+(lineInfo[lineSel.value]?.short||'MRT')+'  •  '+lineSel.value;
+  }
+  const caption=document.createElement('p');caption.textContent='Select a line, starting station and destination on the same line.';box.appendChild(caption);
+  for(const name of mrtLineChoices)lineSel.add(new Option(name,name));
+  function fill(){fromSel.replaceChildren();toSel.replaceChildren();for(const station of stationSequences[lineSel.value]||[]){fromSel.add(new Option(station,station));toSel.add(new Option(station,station))}toSel.selectedIndex=Math.min(3,toSel.options.length-1)}
+  lineSel.onchange=()=>{fill();updateRouteColors()};fill();updateRouteColors();
+  const error=document.createElement('p');error.style.color='#ffdd80';box.appendChild(error);
+  const go=document.createElement('button');go.type='button';go.textContent='▶ Start custom journey';go.style.cssText='padding:14px;font-size:20px;font-weight:bold;background:#187348;color:white;border-radius:10px';box.appendChild(go);
+  go.onclick=()=>{if(fromSel.value===toSel.value){error.textContent='Choose two different stations.';return}customDirectRoutes[adventureStep]={line:lineSel.value,from:fromSel.value,to:toSel.value};selectedMrtLines[adventureStep]=lineSel.value;$('linePicker').style.display='none';onChosen()};
+  const back=document.createElement('button');back.textContent='← Back';back.onclick=()=>chooseLineForScenario(onChosen);box.appendChild(back);
+ };
  const options=[...mrtLineChoices,"No preference (random line)"];
  options.forEach((label,i)=>{
   const b=document.createElement("button");b.type="button";
@@ -2499,6 +2557,7 @@ function chooseLineForScenario(onChosen){
    $("linePicker").style.display="none";
    onChosen();
   };
+  if(i===mrtLineChoices.length)box.appendChild(custom);
   box.appendChild(b);
  });
  $("linePicker").style.display="flex";
@@ -2582,7 +2641,7 @@ function toggleMusic(){
  }
  else{clearInterval(bgMusicTimer);bgMusicTimer=null;$("musicBtn").textContent="🔇 MUSIC OFF"}
 }function sync(){hp=Math.max(0,Math.min(100,hp));hp=Math.max(0,Math.min(100,Number(hp)||0));mp=Math.max(0,Math.min(100,Number(mp)||0));const survival=$("survivalBanner");if(survival)survival.classList.toggle("active",hp===0);$("hpN").textContent=hp;$("mpN").textContent=mp;$("hpFill").style.width=hp+"%";$("mpFill").style.width=mp+"%";let c=classes[cls];$("ability").textContent=c[0]+" "+c[2]+" • "+Math.floor(mp/20)+" uses";$("ability").disabled=false}
-function startGame(){if(mode==="bus"){startBusScene();return}adventureStep=0;adventureMissions=[];selectedMrtLines=[];chooseLineForScenario(beginMrtScenario);return;}
+function startGame(){if(mode==="bus"){startBusScene();return}adventureStep=0;adventureMissions=[];selectedMrtLines=[];Object.keys(customDirectRoutes).forEach(k=>delete customDirectRoutes[k]);chooseLineForScenario(beginMrtScenario);return;}
 function beginMrtScenario(){pickMission();scenarioStartedAt=Date.now();hp=100;mp=100;randomizeWalkRoute();reached=false;inside=false;let c=classes[cls];$("heroEmoji").textContent=avatar;$("gEmoji").textContent=avatar;$("mrtName").textContent=mission[1].toUpperCase()+" MRT";$("mrtCode").textContent=mission[2]+" • "+mission[5];let li=lineInfo[mission[5]]||lineInfo["East-West Line"];$("mrt").style.borderColor=li.color;$("mrt").style.boxShadow="inset 10px 0 0 "+li.color;$("mission").innerHTML="🚇 Scenario "+(adventureStep+1)+"/5 • 🎯 Go to "+mission[3]+" to "+travelPurpose(mission)+" • "+mission[1]+" "+mission[2]+" → "+mission[3]+" "+mission[4];$("start").style.display="none";$("game").style.display="grid";$("walk").classList.remove("hidden");$("gantry").classList.add("hidden");$("enter").style.display="none";drawWalk();sync();if(mode!=="mrt"&&mode!=="mixed")toast("Only Direct MRT is active while we rebuild scene by scene.")}
 $("startBtn").onclick=startGame;
 
@@ -3803,6 +3862,11 @@ startGame=function(){if(mode==='bus'){active=false;completed=0;newDeck();active=
 (function(){
 const $t=id=>document.getElementById(id),root=$t('transferAdventure');
 const routeBank=[
+ // Two transfers: MRT → MRT → LRT, or LRT → MRT → MRT.
+ [{line:'Circle Line',from:'Bishan',to:'Serangoon'},{line:'North East Line',from:'Serangoon',to:'Sengkang'},{line:'Sengkang LRT East Loop',from:'Sengkang',to:'Compassvale'}],
+ [{line:'Circle Line',from:'Paya Lebar',to:'Serangoon'},{line:'North East Line',from:'Serangoon',to:'Punggol'},{line:'Punggol LRT East Loop',from:'Punggol',to:'Cove'}],
+ [{line:'Sengkang LRT West Loop',from:'Farmway',to:'Sengkang'},{line:'North East Line',from:'Sengkang',to:'Serangoon'},{line:'Circle Line',from:'Serangoon',to:'Bishan'}],
+ [{line:'Punggol LRT West Loop',from:'Sam Kee',to:'Punggol'},{line:'North East Line',from:'Punggol',to:'Serangoon'},{line:'Circle Line',from:'Serangoon',to:'Paya Lebar'}],
  [{line:'North East Line',from:'Hougang',to:'Sengkang'},{line:'Sengkang LRT East Loop',from:'Sengkang',to:'Compassvale'}],
  [{line:'Sengkang LRT West Loop',from:'Farmway',to:'Sengkang'},{line:'North East Line',from:'Sengkang',to:'Serangoon'}],
  [{line:'North East Line',from:'Serangoon',to:'Punggol'},{line:'Punggol LRT East Loop',from:'Punggol',to:'Cove'}],
@@ -3837,7 +3901,61 @@ const routeBank=[
 ];
 let transferMethodDeck=[],transferMethodHistory=[];let scenario=0,route=[],used=[],leg=0,phase='',x=50,y=80,hp=100,mana=100,started=0,timer=null,transferMethod='',transferDirection='',targetLevel=0,chosenLevel=0,waiting=false,correctAnswers=0,mistakes=[],good=[],atTransfer=false,complete=false;
 const pick=a=>a[Math.floor(Math.random()*a.length)];
-function chooseRoute(){const n=scenario<3?2:3;let choices=routeBank.map((r,i)=>i).filter(i=>routeBank[i].length===n&&!used.includes(i));if(!choices.length)choices=routeBank.map((r,i)=>i).filter(i=>routeBank[i].length===n);const idx=pick(choices);used.push(idx);return routeBank[idx]}
+const customTransferRoutes={};
+function transferRoutePicker(onChosen){
+ const overlay=$t('linePicker'),box=$t('linePickerChoices');
+ $t('linePickerTitle').textContent='🔄 MRT / LRT Transfer — Scenario '+(scenario+1)+'/5';
+ box.replaceChildren();overlay.style.display='flex';
+ const info=document.createElement('p');info.textContent='This scenario has '+(scenario<3?'1 transfer':'2 transfers')+'. Choose how to practise.';box.appendChild(info);
+ const random=document.createElement('button');random.textContent='🎲 No preference — random journey';random.className='trCustomBtn';random.onclick=()=>{delete customTransferRoutes[scenario];overlay.style.display='none';onChosen()};box.appendChild(random);
+ const custom=document.createElement('button');custom.textContent='🛠️ Custom route — choose stations';custom.className='trCustomBtn';box.appendChild(custom);
+ custom.onclick=()=>{
+  box.replaceChildren();
+  const heading=document.createElement('p');
+  heading.textContent='Choose your starting line, starting station, transfer station'+(scenario>=3?'s':'')+' and destination.';
+  box.appendChild(heading);
+  const eligible=routeBank.filter(r=>r.length===(scenario<3?2:3));
+  const lineSel=document.createElement('select'),fromSel=document.createElement('select');
+  const transferSels=Array.from({length:scenario<3?1:2},()=>document.createElement('select'));
+  const toSel=document.createElement('select'),sels=[lineSel,fromSel,...transferSels,toSel];
+  const labels=['Starting MRT / LRT line','Starting station',...transferSels.map((_,i)=>'Transfer '+(i+1)+' — station and next line'),'Destination'];
+  const palette={'North-South Line':'#d42e12','East-West Line':'#009645','North East Line':'#9900aa','Circle Line':'#f5a800','Downtown Line':'#005ec4','Thomson-East Coast Line':'#9d5b25'};
+  const colorFor=l=>(window.lineInfo?.[l]?.color)||(l.includes('LRT')?'#7b8994':palette[l]||'#526579');
+  sels.forEach((sel,i)=>{
+   const label=document.createElement('label');label.textContent=(i+1)+'. '+labels[i];label.style.cssText='display:block;text-align:left;font-size:17px;font-weight:800;margin:12px 0 5px';box.appendChild(label);
+   sel.className='trCustomSelect';sel.style.cssText='width:100%;box-sizing:border-box;background:white;color:#172534;font-size:18px;padding:12px;border-radius:10px';box.appendChild(sel);
+  });
+  const unique=items=>[...new Set(items)].sort();
+  const transferKey=(r,i)=>r[i].to+' → '+r[i+1].line;
+  function fill(sel,values){const old=sel.value;sel.replaceChildren();values.forEach(v=>sel.add(new Option(v,v)));if(values.includes(old))sel.value=old}
+  function refresh(changed=0){
+   let options=eligible;
+   if(changed===0)fill(lineSel,unique(options.map(r=>r[0].line)));
+   options=options.filter(r=>r[0].line===lineSel.value);
+   if(changed<=1)fill(fromSel,unique(options.map(r=>r[0].from)));
+   options=options.filter(r=>r[0].from===fromSel.value);
+   transferSels.forEach((sel,i)=>{
+    if(changed<=i+2)fill(sel,unique(options.map(r=>transferKey(r,i))));
+    options=options.filter(r=>transferKey(r,i)===sel.value);
+   });
+   if(changed<=sels.length-1)fill(toSel,unique(options.map(r=>r.at(-1).to)));
+   sels.forEach((sel,i)=>{
+    const line=i<2?lineSel.value:i===sels.length-1?(options[0]?.at(-1)?.line||lineSel.value):sel.value.split(' → ').at(-1);
+    const color=colorFor(line||'');sel.style.border='4px solid '+color;sel.style.boxShadow='inset 7px 0 0 '+color;
+   });
+  }
+  sels.forEach((sel,i)=>sel.onchange=()=>refresh(i+1));refresh(0);
+  const note=document.createElement('p');note.textContent='Transfer choices are limited to stations connecting the selected MRT / LRT lines.';box.appendChild(note);
+  const go=document.createElement('button');go.className='trCustomBtn';go.textContent='▶ Start custom journey';box.appendChild(go);
+  go.onclick=()=>{
+   const selected=eligible.find(r=>r[0].line===lineSel.value&&r[0].from===fromSel.value&&transferSels.every((sel,i)=>transferKey(r,i)===sel.value)&&r.at(-1).to===toSel.value);
+   if(!selected){note.textContent='Please select a valid journey.';return}
+   customTransferRoutes[scenario]=selected.map(l=>({...l}));overlay.style.display='none';onChosen();
+  };
+  const back=document.createElement('button');back.className='trCustomBtn';back.textContent='← Back';back.onclick=()=>transferRoutePicker(onChosen);box.appendChild(back);
+ };
+}
+function chooseRoute(){if(customTransferRoutes[scenario])return customTransferRoutes[scenario].map(l=>({...l}));const n=scenario<3?2:3;let choices=routeBank.map((r,i)=>i).filter(i=>routeBank[i].length===n&&!used.includes(i));if(!choices.length)choices=routeBank.map((r,i)=>i).filter(i=>routeBank[i].length===n);const idx=pick(choices);used.push(idx);return routeBank[idx]}
 function penalty(message){hp=Math.max(0,hp-5);mistakes.push(message);$t('trInstruction').textContent='❌ '+message+' (−5 HP). Try again.';draw()}
 function reward(message){good.push(message);$t('trInstruction').textContent='✅ '+message}
 function draw(){ $t('trHero').style.left=x+'%';$t('trHero').style.top=y+'%';$t('trHP').textContent='❤️ HP '+hp;$t('trMana').textContent='🔵 Mana '+mana;const e=Math.floor((Date.now()-started)/1000);$t('trTime').textContent='⏱️ '+Math.floor(e/60)+':'+String(e%60).padStart(2,'0')}
@@ -4246,9 +4364,9 @@ window.__mixedRunOriginalTransfer=function(fromLeg,toLeg,done){
 };
 function finishTransfer(){if(escalatorTimer){clearInterval(escalatorTimer);escalatorTimer=null}$t('trHero').style.visibility='visible';leg++;reward('Changed lines without leaving the station.');root.style.display='none';$t('game').style.display='grid';if(mixedTransferDone){const cb=mixedTransferDone;mixedTransferDone=null;cb();return}launchLeg(false)}
 function exitGantry(){show('exit','🚪\nEXIT GANTRY','FINAL DESTINATION • '+route[leg].to,'You have reached your final destination. Walk to the EXIT gantry and tap out.', [['💳 TAP OUT',()=>needNear(()=>{reward('Tapped out at the final destination.');summary()})],['🚪 WRONG GANTRY',()=>penalty('Use an EXIT gantry, not an ENTRY gantry.')]])}
-function summary(){complete=true;phase='summary';$t('trStage').style.display='none';$t('trPad').style.display='none';$t('trHeading').textContent='✅ SCENARIO '+(scenario+1)+'/5 SUMMARY';const e=Math.floor((Date.now()-started)/1000);const summary=document.createElement('div');summary.className='trSummary';summary.textContent='🎯 YOUR TASK: '+currentScenarioTask+'\n🚇 '+route[0].from+' → '+route[route.length-1].to+'\n🔄 Transfers: '+(route.length-1)+'\n🕒 Journey time: '+Math.floor(e/60)+'m '+e%60+'s\n❤️ HP: '+hp+' / 100\n🔵 Mana: '+mana+' / 100\n\n✅ WHAT I DID WELL\n'+(good.length?Array.from(new Set(good)).slice(0,5).map(x=>'• '+x).join('\n'):'• Completed the journey.')+'\n\n🔧 WHAT I CAN IMPROVE\n'+(mistakes.length?Array.from(new Set(mistakes)).slice(0,5).map(x=>'• '+x).join('\n'):'• Keep checking the station and platform signs.');$t('trInstruction').replaceChildren(summary);buttons([[scenario===4?'🏠 BACK TO HOME':'➡️ NEXT SCENARIO',()=>{if(scenario===4){root.style.display='none';returnToModeSelection();clearInterval(timer)}else{scenario++;begin()}}]])}
+function summary(){complete=true;phase='summary';$t('trStage').style.display='none';$t('trPad').style.display='none';$t('trHeading').textContent='✅ SCENARIO '+(scenario+1)+'/5 SUMMARY';const e=Math.floor((Date.now()-started)/1000);const summary=document.createElement('div');summary.className='trSummary';summary.textContent='🎯 YOUR TASK: '+currentScenarioTask+'\n🚇 '+route[0].from+' → '+route[route.length-1].to+'\n🔄 Transfers: '+(route.length-1)+'\n🕒 Journey time: '+Math.floor(e/60)+'m '+e%60+'s\n❤️ HP: '+hp+' / 100\n🔵 Mana: '+mana+' / 100\n\n✅ WHAT I DID WELL\n'+(good.length?Array.from(new Set(good)).slice(0,5).map(x=>'• '+x).join('\n'):'• Completed the journey.')+'\n\n🔧 WHAT I CAN IMPROVE\n'+(mistakes.length?Array.from(new Set(mistakes)).slice(0,5).map(x=>'• '+x).join('\n'):'• Keep checking the station and platform signs.');$t('trInstruction').replaceChildren(summary);buttons([[scenario===4?'🏠 BACK TO HOME':'➡️ NEXT SCENARIO',()=>{if(scenario===4){root.style.display='none';returnToModeSelection();clearInterval(timer)}else{scenario++;transferRoutePicker(begin)}}]])}
 function begin(){complete=false;leg=0;route=chooseRoute();currentScenarioTask=scenarioTask(route[route.length-1].to).replace(/\bMRT\b/g,route[route.length-1].line.includes('LRT')?'LRT':'MRT');hp=100;mana=100;mistakes=[];good=[];started=Date.now();$t('trInstruction').replaceChildren();root.style.display='none';launchLeg(true)}
-function launch(){scenario=0;used=[];transferMethodDeck=[];transferMethodHistory=[];clearInterval(timer);timer=setInterval(()=>{if(root.style.display==='block'&&phase!=='summary')draw()},1000);begin()}
+function launch(){scenario=0;used=[];transferMethodDeck=[];transferMethodHistory=[];clearInterval(timer);timer=setInterval(()=>{if(root.style.display==='block'&&phase!=='summary')draw()},1000);Object.keys(customTransferRoutes).forEach(k=>delete customTransferRoutes[k]);transferRoutePicker(begin)}
 root.querySelectorAll('#trPad button').forEach(b=>b.addEventListener('click',e=>{if(phase.startsWith('travel-')){e.stopImmediatePropagation();travelMove(b.dataset.m)}},true));
 const oldStart=startGame;
 function stationOnLine(name,line){const seq=stationSequences[line]||[];return seq.find(v=>cleanStationName(v)===name)}
