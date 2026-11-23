@@ -1423,7 +1423,7 @@ function announce(x,after){
   x=String(x).replace(/\b(?:EW|NS|NE|DT|CC|CE|TE)\s*\d+[A-Z]?\b/gi,"").replace(/\s{2,}/g," ").trim();
   speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(x);u.lang="en-SG";u.rate=.86;u.pitch=1;
   let vs=speechSynthesis.getVoices(),v=vs.find(q=>String(q.lang).toLowerCase()==="en-sg")||vs.find(q=>String(q.lang).toLowerCase().startsWith("en-sg"));
-  if(v)u.voice=v;if(after)u.onend=after;speechSynthesis.speak(u)
+  if(v)u.voice=v;if(after){let finished=false;const done=()=>{if(!finished){finished=true;after()}};u.onend=done;u.onerror=done;}speechSynthesis.speak(u)
  }catch(e){if(after)after()}
 }
 
@@ -1497,13 +1497,10 @@ function nextTrainAnnouncement(stationName){
  return msg;
 }
 function arrivedTrainAnnouncement(stationName){
- const ctx=trainAnnouncementContext(stationName);
- let msg=stationNameForSpeech(stationName)+'. '+stationNameForSpeech(stationName)+'.';
- const lrtMsg=lrtTransferAnnouncementName(ctx.otherLines);
- if(lrtMsg)msg+=' '+lrtMsg;
- else if(ctx.otherLines.length)msg+=' Change here for the '+ctx.otherLines.join(' and ')+'.';
- if(ctx.last&&!lrtMsg)msg+=' This train service ends here. All passengers, please alight.';
- return msg;
+ const ctx=trainAnnouncementContext(stationName), name=stationNameForSpeech(stationName);
+ const lrt=lrtTransferAnnouncementName(ctx.otherLines);
+ const rail=ctx.otherLines.filter(l=>!/LRT/i.test(l));
+ return [name+'.',rail.length?'Transfer here for the '+rail.join(' and ')+'.':'',lrt,name+'.',ctx.last&&!lrt?'This train service ends here. All passengers, please alight.':'','Please mind the platform gap.'].filter(Boolean).join(' ');
 }
 let mrtAlightDecision=null;
 function nextStop(){
@@ -1511,17 +1508,16 @@ function nextStop(){
  let ni=tIndex+tDir;if(ni<0||ni>=tStops.length){$("insideMsg").textContent="End of line. Please check your destination.";return;}
  let x=st(tStops[ni]);$("trainNextName").textContent="Next: "+x.n+" "+x.c;$("trainStatus").textContent="🚆 Next station: "+x.n+" "+x.c;
  $("insideMsg").textContent="🚆 Travelling to "+x.n+". Complete 1 MRT behaviour situation before the next station.";
- stationAnnouncementChime();setTimeout(()=>announce(nextTrainAnnouncement(x.n)),780);
- setTimeout(()=>showTrainBehaviour(()=>arriveTrainStation()),650);
+ stationAnnouncementChime();setTimeout(()=>announce(nextTrainAnnouncement(x.n),()=>showTrainBehaviour(()=>arriveTrainStation())),780);
 }
 function arriveTrainStation(){
  if($("behaviourOverlay").style.display==="flex"){setTimeout(arriveTrainStation,600);return;}
  tMoving=false;tIndex+=tDir;let x=st(tStops[tIndex]);
  mrtAlightDecision=null;tDoors=false;
- $("mrtAlightChoice").style.display="flex";
- $("trainStatus").textContent="🚉 Arrived at "+x.n+" "+x.c;
- $("trainNextName").textContent="Arrived: "+x.n+" "+x.c;
- $("insideMsg").textContent="🚉 Choose ALIGHT or DON'T ALIGHT before the doors announcement.";
+ $("mrtAlightChoice").style.display="none";
+ $("trainStatus").textContent="🚆 Approaching "+x.n+" "+x.c;
+ $("trainNextName").textContent="Next: "+x.n+" "+x.c;
+ $("insideMsg").textContent="🔊 Listen to the station announcement first.";
  // The arrival/door announcements and opening cannot start until a decision is made.
  const emergencyMustAlight=!!window.__emergencyForceNextAlight;
  if(emergencyMustAlight){
@@ -1532,16 +1528,17 @@ function arriveTrainStation(){
    $("mrtChooseStay").disabled=false;
    $("mrtChooseStay").style.display="";
  }
- let decided=false;
+ let decided=false, announcementReady=false;
  function chooseAlighting(choice){
    if(emergencyMustAlight && choice!=='alight')return;
-   if(decided)return;decided=true;
+   if(decided||!announcementReady)return;decided=true;
    mrtAlightDecision=choice;
    $("mrtAlightChoice").style.display="none";
    $("insideMsg").textContent=choice==='alight'?"🚪 ALIGHT selected. Listen for the doors announcement.":"🚆 DON'T ALIGHT selected. Stay inside the train.";
+   $("trainStatus").textContent="🚉 Arrived at "+x.n+" "+x.c;
+   $("trainNextName").textContent="Arrived: "+x.n+" "+x.c;
    stationArrivalChime();
-   setTimeout(()=>announce(arrivedTrainAnnouncement(x.n),()=>{
-     announce("Doors opening.");doorOpeningChime();
+   setTimeout(()=>announce(arrivedTrainAnnouncement(x.n),()=>announce("Doors opening.",()=>{doorOpeningChime();
      setTimeout(()=>{
        tDoors=true;$("insideDoors").classList.add("open");
        $("trainStatus").classList.remove("doorClosingStatus");
@@ -1560,11 +1557,11 @@ function arriveTrainStation(){
            setTimeout(()=>{if(window.__emergencyForceNextAlight&&tDoors){clearInterval(alightTimerId);alightNow();}},1300);
          }
      },900);
-   }),780);
+   })),780);
  }
  $("mrtChooseAlight").onclick=()=>chooseAlighting('alight');
  $("mrtChooseStay").onclick=()=>chooseAlighting('stay');
- if(emergencyMustAlight)setTimeout(()=>chooseAlighting('alight'),450);
+ announcementReady=true;$("mrtAlightChoice").style.display="flex";$("insideMsg").textContent=emergencyMustAlight?"🚨 Alight here to take your chosen bus.":"Choose ALIGHT or DON’T ALIGHT.";
 }
 
 function isPeakHourNow(){
@@ -4950,20 +4947,28 @@ function draw(){
  // The near end of a downward escalator is at the TOP of the picture.
  // The upward escalator is seen from behind, entering from the BOTTOM.
  const near=phase===0?29:78, far=phase===0?77:27;
- const x=lane==='left'?46:54;
+ // Calculate lane centres from the actual rendered step trapezoid.
+ const sceneRect=$e('escScene').getBoundingClientRect();
+ const stepsRect=$e('escSteps').getBoundingClientRect();
+ function laneCentre(side,y){
+   if(!sceneRect.width||!stepsRect.width||!stepsRect.height)return side==='left'?40:60;
+   const f=Math.max(0,Math.min(1,(sceneRect.top+y*sceneRect.height/100-stepsRect.top)/stepsRect.height));
+   const half=stepsRect.width*(1-0.36*f)/4;
+   return (stepsRect.left+stepsRect.width/2+(side==='left'?-half:half)-sceneRect.left)*100/sceneRect.width;
+ }
  const approachY=phase===0?Math.min(near-4,15+distance*2.0):Math.max(near+4,94-distance*2.0);
  const rideY=near+(far-near)*progress/100;
  const py=state==='approach'?approachY:state==='queue'?near+(phase===0?-7:7):state==='riding'?rideY:far;
- const px=x;
+ const px=laneCentre(lane,py);
  html+=person(playerEmoji,px,py,true);
  for(let i=0;i<queue;i++){
    let yy=near+(phase===0?-1:1)*(i*6+3);
-   html+=person(['🧑🏽','👩🏻','👨🏾','👩🏽‍🦱','👨🏻','👩🏾'][i%6],46,Math.max(5,Math.min(95,yy)));
+   html+=person(['🧑🏽','👩🏻','👨🏾','👩🏽‍🦱','👨🏻','👩🏾'][i%6],laneCentre('left',yy),Math.max(5,Math.min(95,yy)));
  }
  for(let i=0;i<behind && state==='queue';i++){
    // Waiting passengers have their own fixed queue positions, independent of the player's lane and movement.
    const yy=near+(phase===0?-1:1)*(13+i*6); // People queue at the entrance, independently of player progress.
-   html+=person(['🧑🏻','👩🏾','👨🏻','👩🏼'][i%4],46,Math.max(8,Math.min(93,yy)));
+   html+=person(['🧑🏻','👩🏾','👨🏻','👩🏼'][i%4],laneCentre('left',yy),Math.max(8,Math.min(93,yy)));
  }
  for(let i=0;i<occupants.length;i++){
    let o=occupants[i];
@@ -4971,7 +4976,7 @@ function draw(){
    const oy=near+(far-near)*o.p/100;
    // Never draw a passenger over the learner; maintain a visible safe gap.
    if(state==='riding' && o.lane===lane && Math.abs(oy-py)<8)continue;
-   html+=person(o.icon,(o.lane==='left'?46:54),oy);
+   html+=person(o.icon,laneCentre(o.lane,oy),oy);
  }
  $e('escPeople').innerHTML=html;
  // Keep the player above the instruction panel, so their location remains visible.
@@ -5032,8 +5037,8 @@ function tick(){
    // New passengers join at the entrance, not as frozen icons above the escalator.
    if(progress>=100){
      progress=100;state='done';walking=false;
-     say(phase===0?'✅ You reached the bottom safely! Now practise riding an upward escalator.':'🎉 Both escalator practices completed! You may return to Other Services.');
-     $e('escNext').textContent=phase===0?'⬆️ PRACTISE UPWARD ESCALATOR':'🏠 BACK TO OTHER SERVICES';
+     say(phase===0?'✅ You reached the bottom safely! Now practise riding an upward escalator.':'🎉 Both escalator practices completed! Next, complete the safety quiz.');
+     $e('escNext').textContent=phase===0?'⬆️ PRACTISE UPWARD ESCALATOR':'📝 START SAFETY QUIZ';
      $e('escNext').style.display='inline-block';$e('escRetry').style.display='inline-block';clearInterval(timer);
    }
  }
@@ -5074,7 +5079,7 @@ function tick(){
  }
  draw();
 }
-$e('escPadLeft').onclick=()=>move('left');$e('escPadRight').onclick=()=>move('right');$e('escPadUp').onclick=()=>move('forward');$e('escPadDown').onclick=()=>move('back');$e('escAction').onclick=join;$e('escExcuse').onclick=()=>{if(!blocked)return;blocked=false;occupants=occupants.filter(o=>o.lane!=='right');walking=true;say('🗣️ “Excuse me, please.” The passenger moves ahead. You can continue walking.');draw()};$e('escRetry').onclick=()=>{if(state!=='done')return;startPhase()};$e('escNext').onclick=()=>{if(state!=='done')return;if(phase===0){phase=1;startPhase()}else{clearInterval(timer);$e('escApp').style.display='none';$e('servicesPanel').style.display='flex';$e('start').style.display='';}};
+$e('escPadLeft').onclick=()=>move('left');$e('escPadRight').onclick=()=>move('right');$e('escPadUp').onclick=()=>move('forward');$e('escPadDown').onclick=()=>move('back');$e('escAction').onclick=join;$e('escExcuse').onclick=()=>{if(!blocked)return;blocked=false;occupants=occupants.filter(o=>o.lane!=='right');walking=true;say('🗣️ “Excuse me, please.” The passenger moves ahead. You can continue walking.');draw()};$e('escRetry').onclick=()=>{if(state!=='done')return;startPhase()};$e('escNext').onclick=()=>{if(state!=='done')return;if(phase===0){phase=1;startPhase()}else{clearInterval(timer);$e('escApp').style.display='none';window.startEscSafetyQuiz();}};
 $e('serviceEscalator').onclick=begin;
 })();
 </script>
@@ -6248,7 +6253,10 @@ const old=by('serviceEmergency');if(old){const fresh=old.cloneNode(true);old.rep
 #busQueue #busVisualGuide{overflow:hidden!important;box-sizing:border-box!important}
 #busQueue #guideBusNumber{font-size:clamp(11px,1.7vw,22px)!important;line-height:1.12!important;max-width:100%!important;overflow-wrap:anywhere!important;word-break:break-word!important}
 #busQueue .realBus .busNumber{font-size:clamp(12px,2.1vw,32px)!important;overflow-wrap:anywhere!important;word-break:break-word!important}
-</style></body></html>
+</style><style>#escSafety{position:fixed;inset:0;z-index:2147483647;background:#102b3c;color:white;overflow:auto;padding:16px;box-sizing:border-box;font:700 18px system-ui}#escSafety section{max-width:760px;margin:auto}#escSafety button{display:block;width:100%;padding:15px;margin:12px 0;border:2px solid #90b8ce;border-radius:12px;background:#174c69;color:white;font:inherit;text-align:left;white-space:normal}#escSafety h2{font-size:clamp(20px,4vw,30px)}#escSafety .visual{font-size:64px;text-align:center}#escSafety .feedback{background:#fff;color:#132a3b;padding:16px;border-radius:12px}</style><script>
+window.startEscSafetyQuiz=function(){
+const bank=[["🤚", "What should you hold while riding?", "🤚 Hold the handrail", "📱 Hold your phone with both hands", "🙌 Keep both hands in the air", "The handrail helps you keep your balance."], ["👟", "Where should your feet be?", "👟 In the middle of the step, away from edges", "↔️ Against the side panel", "🦶 Between two steps", "Keep shoes away from the sides and gaps to avoid trapping them."], ["🏃", "You are late. What should you do?", "🧍 Stand steadily and ride safely", "🏃 Run down the escalator", "🦘 Jump over steps", "Running or jumping can cause falls."], ["🎮", "Your friend wants to play on the escalator. What should you do?", "🛑 Say no and stand safely", "🤸 Play together", "👉 Push your friend", "Playing can cause you or others to fall."], ["👟", "Your shoelace is loose. What should you do?", "🪢 Tie it before boarding", "🚶 Ride with it loose", "🦶 Drag it along the steps", "Loose laces can get trapped."], ["🚪", "You reach the end. What should you do?", "🚶 Step off and move away", "🧍 Stop at the landing", "📱 Stop to check your phone", "Keep the landing clear for others."], ["🧳", "You have a large heavy suitcase. What is safer?", "🛗 Use the lift", "🧳 Balance it on the step", "🏃 Carry it while running", "A lift is safer for bulky luggage."], ["👀", "Where should you look while riding?", "👀 Face forward and watch the steps", "🔙 Face backwards", "📱 Look only at your phone", "Watch where you are going, especially at the landing."], ["👥", "People are waiting to board. What should you do?", "⏳ Wait your turn", "💨 Push past them", "↔️ Squeeze between people", "Queue patiently to prevent falls."], ["🛍️", "How should you carry your shopping bag?", "🛍️ Keep it close and away from edges", "↔️ Drag it along the side", "🎈 Swing it around", "Keep bags away from moving parts."], ["🦶", "Your shoe gets trapped. What should you do?", "🗣️ Call for help immediately", "🤫 Stay quiet", "🏃 Pull hard and run", "Alert others and ask staff for help."], ["🆘", "Someone falls and is in danger on the escalator. What should you do?", "🛑 Press the emergency stop if safely reachable and call for help", "🚶 Ignore them", "👥 Push past them", "The emergency stop is for real emergencies. Alert station staff immediately."], ["🛗", "You are using a wheelchair. Which should you use?", "🛗 Lift", "↗️ Escalator", "🪜 Stairs", "Use the lift for safe access."], ["🧍", "How should you step onto the escalator?", "👀 Watch the moving steps and step on carefully", "🙈 Step on without looking", "🦘 Jump onto a step", "Look at the steps and board carefully."], ["🚦", "The escalator has a red no-entry sign. What should you do?", "🚦 Find another escalator or lift", "🚦 Step onto it anyway", "🚦 Climb over the barrier", "Follow the direction signs."], ["🛑", "Your friend wants to press the emergency stop button for fun. What should you do?", "✋ Tell them not to press it", "🔴 Press it together", "😂 Let them press it as a joke", "Never play with the emergency stop button. A sudden stop can cause people to fall. Use it only in a real emergency."], ["📱", "Your phone rings while riding. What is safest?", "📱 Wait until you step off and move away", "📱 Look down and type", "📱 Stop at the landing to answer", "Keep your attention on the moving steps."], ["🛒", "You have a shopping trolley. Which is safer?", "🛒 Use the lift", "🛒 Push it onto the escalator", "🛒 Pull it down the steps", "Trolleys can tip or get trapped."], ["👶", "You are pushing a baby stroller. What should you use?", "👶 Use the lift", "👶 Push it onto the escalator", "👶 Balance it on one step", "A lift is safer for strollers."], ["🧥", "Your long coat hangs near the steps. What should you do?", "🧥 Keep the coat away from moving parts", "🧥 Let it drag", "🧥 Tuck it into the side gap", "Loose clothing can get caught."], ["🎒", "Your backpack strap is hanging down. What should you do?", "🎒 Secure the strap before boarding", "🎒 Let it trail behind", "🎒 Swing it near the steps", "Loose straps can get trapped."], ["👥", "The escalator is very crowded. What should you do?", "👥 Wait for enough space", "👥 Squeeze onto a full step", "👥 Push people forward", "Give yourself room to stand safely."], ["🧍", "You feel dizzy before boarding. What should you do?", "🧍 Stay off and ask for help", "🧍 Board quickly", "🧍 Run up the escalator", "Do not board if you cannot balance safely."], ["↗️", "The escalator is moving towards you. What should you do?", "↗️ Find one going your direction", "↗️ Walk against the flow", "↗️ Jump onto it", "Never travel against the escalator direction."], ["🧹", "A staff member has closed the escalator for cleaning. What should you do?", "🧹 Follow the alternative route", "🧹 Move the barrier", "🧹 Walk through the closed area", "Respect safety barriers."], ["🤚", "Your hands are full of bags. What is safer?", "🤚 Use the lift if you cannot hold the rail", "🤚 Ride without balance support", "🤚 Place bags on moving steps", "Keep a hand free or use the lift."], ["🪙", "You drop a coin into the step gap. What should you do?", "🪙 Leave it and tell staff", "🪙 Put fingers into the gap", "🪙 Stop and search the moving steps", "Never reach into moving machinery."], ["🧍", "Can you sit on an escalator step?", "🧍 No, stand safely or use the lift", "🧍 Yes, if tired", "🧍 Yes, if nobody is behind", "Sitting brings clothing and hands near moving parts."], ["🤚", "Should you slide down the handrail?", "🤚 No, hold it for balance", "🤚 Yes, when empty", "🤚 Yes, if a friend watches", "The handrail is not a slide."], ["🚧", "You see a damaged step before boarding. What should you do?", "🚧 Avoid it and tell station staff", "🚧 Test it with your foot", "🚧 Ask a friend to step on it", "Report damage and use another route."]];const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){let j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};const questions=shuffle(bank).slice(0,10);let i=0,score=0,wrong=[];const root=document.createElement('div');root.id='escSafety';document.body.append(root);const draw=()=>{if(i===10){root.innerHTML='<section><h2>🎉 Quiz complete</h2><h2>Score: '+score+'/10</h2>'+ (wrong.length?'<h3>Review your answers</h3>'+wrong.map(q=>'<p>'+q[0]+' '+q[1]+'<br>✅ '+q[2]+'<br>'+q[5]+'</p>').join(''):'<p>Great work! All answers correct.</p>')+'<button id="escQuizExit">← Back to Other Services</button></section>';document.getElementById('escQuizExit').onclick=()=>{root.remove();document.getElementById('servicesPanel').style.display='flex';document.getElementById('start').style.display='';};return}const q=questions[i];root.innerHTML='<section><h2>↗️ Escalator Safety • '+(i+1)+'/10</h2><div class="visual">'+q[0]+'</div><h2>'+q[1]+'</h2><div id="escSafetyOptions"></div><div id="escSafetyFeedback" aria-live="polite"></div></section>';for(const opt of shuffle(q.slice(2,5))){const b=document.createElement('button');b.textContent=opt;document.getElementById('escSafetyOptions').append(b);b.onclick=()=>{const correct=opt===q[2];if(correct)score++;else wrong.push(q);root.querySelectorAll('button').forEach(b=>b.disabled=true);document.getElementById('escSafetyFeedback').innerHTML='<div class="feedback">'+(correct?'✅ Correct!':'❌ Not quite. Correct answer: '+q[2])+'<p>💡 '+q[5]+'</p></div><button id="escSafetyNext">'+(i===9?'See summary':'Next question →')+'</button>';document.getElementById('escSafetyNext').onclick=()=>{i++;draw()};};}};draw();};
+</script></body></html>
 <style id="tpFinalStraightCardFix">#topupApp #tpWalletContents #tpCard,#topupApp #tpDragGhost.card,#topupApp #tpReaderCard.hasCard{background-size:100% 100%!important;background-position:center!important;background-repeat:no-repeat!important;transform:none!important;rotate:0deg!important}#topupApp #tpWalletContents #tpCard{aspect-ratio:2.15/1!important;width:100%!important;height:auto!important;min-width:0!important;max-width:100%!important}</style>
 
 <style>#psSubChoices button{background:#e1f1fb;color:#123248;border:2px solid #6b9ab3;border-radius:12px;padding:16px;font-weight:800;font-size:18px;cursor:pointer}#psSubBack{background:#fff;color:#123248;border:2px solid #6b9ab3;border-radius:10px;padding:12px;font-size:16px}#psClose:disabled{cursor:not-allowed}</style>
@@ -6259,3 +6267,7 @@ const old=by('serviceEmergency');if(old){const fresh=old.cloneNode(true);old.rep
 #trActions button:has(+ button):is(:first-child),#mxActions button:has(+ button):is(:first-child){outline-offset:2px}
 </style>
 <style id="mrtDecisionShineActual">@keyframes mrtDecGlow{0%,100%{box-shadow:0 0 5px 3px #ffe76c}50%{box-shadow:0 0 20px 8px #ffd500}}.mrtDecisionShine{animation:mrtDecGlow 1s infinite!important;border:3px solid #ffe76c!important}</style>
+<style id="escalatorYellowSafetyEdges">
+#escSteps::after{content:"";position:absolute;inset:0;pointer-events:none;background:#ffdb00;clip-path:polygon(evenodd,18% 0,82% 0,100% 100%,0 100%,18% 0,20% 0,2.5% 100%,97.5% 100%,80% 0,20% 0);}
+#escScene.up #escSteps::after{clip-path:polygon(evenodd,0 0,100% 0,82% 100%,18% 100%,0 0,2.5% 0,20% 100%,80% 100%,97.5% 0,2.5% 0);}
+</style>
